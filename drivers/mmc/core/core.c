@@ -228,15 +228,15 @@ void mmc_wait_for_req(struct mmc_host *host, struct mmc_request *mrq)
 	mrq->done = mmc_wait_done;
 
 	mmc_start_request(host, mrq);
-//#ifdef CONFIG_BCM_WIFI
-//    if(!wait_for_completion_timeout(&complete, 5*HZ))
-//	{
-//		printk("shaohua mmc 5 dec timeout \n");
-//		mrq->cmd->error = -1;
-//	}
-//#else
-	wait_for_completion(&complete);
-//#endif
+#ifdef CONFIG_BCM_WIFI
+    if(!wait_for_completion_timeout(&complete, 5*HZ))
+	{
+		printk("shaohua mmc 5 dec timeout \n");
+		mrq->cmd->error = -1;
+	}
+#else
+	wait_for_completion_io(&complete);
+#endif
 }
 
 EXPORT_SYMBOL(mmc_wait_for_req);

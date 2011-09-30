@@ -1591,6 +1591,7 @@ MODULE_DESCRIPTION("Battery driver for Qualcomm MSM chipsets.");
 MODULE_VERSION("1.0");
 MODULE_ALIAS("platform:msm_battery");
 #else
+
 #include <linux/earlysuspend.h>
 #include <linux/err.h>
 #include <linux/module.h>
@@ -1619,8 +1620,8 @@ static int wl_initialized = 0;//The rpc occur anytime ,so ,we must make sure tha
 
 
 /* liu.yijian@zte.com.cn 20091127 _FILE_INDEX */
-#define MSM_BATTERY_DEBUGX
-#ifdef MSM_BATTERY_DEBUG
+//#define MSM_BATTERY_DEBUGX
+#ifdef MSM_BATTERY_DEBUGX
 #define DEBUG_MSM_BATTERY(fmt, args...)\
     do\
     {\
@@ -1762,6 +1763,10 @@ struct __attribute__((packed)) smem_batt_chg_t
 };
 
 static struct smem_batt_chg_t rep_batt_chg;
+
+#if defined(CONFIG_MACH_BLADE)
+static long last_resume_secs;
+#endif
 
 struct msm_battery_info
 {
@@ -1992,13 +1997,13 @@ static int msm_batt_power_get_property(struct power_supply *psy,
         val->intval = msm_batt_info.batt_technology;
         break;
     case POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN:
-        val->intval = msm_batt_info.voltage_max_design;
+        val->intval = msm_batt_info.voltage_max_design*1000;
         break;
     case POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN:
-        val->intval = msm_batt_info.voltage_min_design;
+        val->intval = msm_batt_info.voltage_min_design*1000;
         break;
     case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-        val->intval = msm_batt_info.battery_voltage;
+        val->intval = msm_batt_info.battery_voltage*1000;
         break;
     case POWER_SUPPLY_PROP_CAPACITY:
 #ifdef	ZTE_PLATFORM_NOT_SHUTDOWN_WHILE_PERCENTAGE_0
@@ -2046,6 +2051,7 @@ module_param_named(usb_chg_enable, usb_charger_enable, int, S_IRUGO | S_IWUSR | 
 #define CHG_RPC_VERS		0x00010003
 
 #define BATTERY_ENABLE_DISABLE_USB_CHG_PROC 		6
+#define BATTERY_MAX_TEMP 	68
 
 
 
@@ -2182,7 +2188,7 @@ static int msm_batt_get_batt_chg_status_v1(void)
             rep_batt_chg.battery_voltage=gaugereadvalue&0xffff;
 #endif
         }
-	 else	//chenchongbao.20110713_1  Èç¹û¶ÁµçÁ¿¼Æ³ö´í£¬Ôò²ÉÓÃÉÏ´ÎµçÁ¿¼ÆÊı¾İ
+	 else	//chenchongbao.20110713_1  å¦‚æœè¯»ç”µé‡è®¡å‡ºé”™ï¼Œåˆ™é‡‡ç”¨ä¸Šæ¬¡ç”µé‡è®¡æ•°æ®
 	{
 		gauge_voltage = gauge_old_voltage;
 		rep_batt_chg.battery_voltage=gauge_voltage;
@@ -2202,7 +2208,7 @@ static int msm_batt_get_batt_chg_status_v1(void)
 				rep_batt_chg.battery_capacity=0;
 			}
 			//else use arm9 capacity data!
-			else	//chenchongbao.20110713_1	Èç¹ûÃ»ÓĞÈç´Ë´¦Àí£¬½«µ¼ÖÂµçÁ¿ÓÉ0Ìø±äµ½ARM9 µÄÈİÁ¿Öµ±ÈÈç3% !!!
+			else	//chenchongbao.20110713_1	å¦‚æœæ²¡æœ‰å¦‚æ­¤å¤„ç†ï¼Œå°†å¯¼è‡´ç”µé‡ç”±0è·³å˜åˆ°ARM9 çš„å®¹é‡å€¼æ¯”å¦‚3% !!!
 			{
 				if(rep_batt_chg.battery_capacity!=0){
 					rep_batt_chg.battery_capacity=1;	
@@ -2217,7 +2223,7 @@ static int msm_batt_get_batt_chg_status_v1(void)
             rep_batt_chg.battery_capacity=gaugereadvalue&0xff;
 #endif
         }
-	else	//chenchongbao.20110713_1  Èç¹û¶ÁµçÁ¿¼Æ³ö´í£¬Ôò²ÉÓÃÉÏ´ÎµçÁ¿¼ÆÊı¾İ
+	else	//chenchongbao.20110713_1  å¦‚æœè¯»ç”µé‡è®¡å‡ºé”™ï¼Œåˆ™é‡‡ç”¨ä¸Šæ¬¡ç”µé‡è®¡æ•°æ®
 	{
 		gauge_capacity = gauge_old_capacity;
 		rep_batt_chg.battery_capacity=gauge_capacity;
@@ -2229,7 +2235,7 @@ static int msm_batt_get_batt_chg_status_v1(void)
 #ifdef ZTE_GAUGE_OPTIMIZE_FEATURE
            	gauge_status++; 
             //gaugereadvalue |= 0xFFFF0000;	//chenchongbao.2011.6.7
-            if(gaugereadvalue & 0x8000)		//chenchongbao.20110713_1 ½â¾ö¸ºÖµÎÊÌâ
+            if(gaugereadvalue & 0x8000)		//chenchongbao.20110713_1 è§£å†³è´Ÿå€¼é—®é¢˜
 				gaugereadvalue |= 0xFFFF0000;
 		gauge_current=(int)gaugereadvalue;
 #endif
@@ -2286,10 +2292,10 @@ static int msm_batt_get_batt_chg_status_v1(void)
 #endif	//ZTE_GAUGE_OPTIMIZE_FEATURE
 
 
-//chenchongbao.2011.5.25 : ÓÃÓÚ´¦ÀíÁ¬½ÓUSB Ê±ÊÖ»ú´óµçÁ÷Ôì³ÉµÄµôµç¹Ø»ú·´¸´ÖØÆôÎÊÌâ!
+//chenchongbao.2011.5.25 : ç”¨äºå¤„ç†è¿æ¥USB æ—¶æ‰‹æœºå¤§ç”µæµé€ æˆçš„æ‰ç”µå…³æœºåå¤é‡å¯é—®é¢˜!
 
 if(  ( (rep_batt_chg.charger_type == CHARGER_TYPE_USB_PC) ||(rep_batt_chg.charger_type == CHARGER_TYPE_USB_WALL) )
-		//(rep_batt_chg.charger_type != CHARGER_TYPE_NONE)  V9  Ä¬ÈÏÎªNONE! ÎªÁË±ÜÃâ³öÏÖinvalid ÀàĞÍ, Òò´Ë²ÉÓÃÉÏÊöÁ½¸öÌõ¼ş!
+		//(rep_batt_chg.charger_type != CHARGER_TYPE_NONE)  V9  é»˜è®¤ä¸ºNONE! ä¸ºäº†é¿å…å‡ºç°invalid ç±»å‹, å› æ­¤é‡‡ç”¨ä¸Šè¿°ä¸¤ä¸ªæ¡ä»¶!
 	&& (rep_batt_chg.battery_capacity == 0) && (rep_batt_chg.battery_voltage < 3400) )
 {
 	low_power_cnt ++;
@@ -2372,6 +2378,7 @@ void msm_batt_update_psy_status_v1(void)
         return;
     }
 
+#ifdef MSM_BATTERY_DEBUGX
 	/*once one of the following change,such as charger_status,charger_type,battery_status
 	,battery_level, battery_voltage,battery_temp,chg_fulled and charging.
 	, printk the debug information.*/
@@ -2390,6 +2397,7 @@ void msm_batt_update_psy_status_v1(void)
            ,shutdown_percentage_zero_enable
            #endif
            );
+#endif
 
     if (rep_batt_chg.battery_status != BATTERY_STATUS_INVALID)
     {
@@ -2552,7 +2560,20 @@ void msm_batt_update_psy_status_v1(void)
     msm_batt_info.battery_level = rep_batt_chg.battery_level;
     msm_batt_info.battery_voltage = rep_batt_chg.battery_voltage;
     msm_batt_info.battery_capacity = rep_batt_chg.battery_capacity;
-    msm_batt_info.battery_temp = rep_batt_chg.battery_temp;
+    /* Battery temperature measurements on blade are unreliable for some time after resume. */
+    /* Ignore high battery temp if battery status is still good. 0=good 1=bad temp. */
+    /* Android shuts down if any one temperature reading is above 68 C (see BatteryService.java). */
+    /* Blade temperature readings are especially high after using GPS. */
+#if defined(CONFIG_MACH_BLADE)
+    if(!rep_batt_chg.battery_status && rep_batt_chg.battery_temp > BATTERY_MAX_TEMP)
+    {
+        printk("%s(): ignoring battery temperature reading (%u) - status is still good. Time since resume is %li seconds. status=%u.\n", __func__, rep_batt_chg.battery_temp,current_kernel_time().tv_sec - last_resume_secs, rep_batt_chg.battery_status);
+        msm_batt_info.battery_temp = BATTERY_MAX_TEMP;
+    }
+    else
+#endif
+        msm_batt_info.battery_temp = rep_batt_chg.battery_temp;
+
     msm_batt_info.chg_fulled = rep_batt_chg.chg_fulled;
     msm_batt_info.charging = rep_batt_chg.charging;
 
@@ -2616,6 +2637,9 @@ static int msm_batt_handle_suspend(void)
 
 static int msm_batt_handle_resume(void)
 {
+#if defined(CONFIG_MACH_BLADE)
+    last_resume_secs = current_kernel_time().tv_sec;
+#endif
     msm_batt_update_psy_status_v1();
     return 0;
 }
@@ -3063,3 +3087,4 @@ MODULE_VERSION("1.0");
 MODULE_ALIAS("platform:msm_battery");
 
 #endif
+

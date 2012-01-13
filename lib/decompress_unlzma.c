@@ -33,7 +33,6 @@
 #define PREBOOT
 #else
 #include <linux/decompress/unlzma.h>
-#include <linux/slab.h>
 #endif /* STATIC */
 
 #include <linux/decompress/mm.h>
@@ -74,6 +73,7 @@ struct rc {
 	uint32_t code;
 	uint32_t range;
 	uint32_t bound;
+	void (*error)(char *);
 };
 
 
@@ -82,7 +82,7 @@ struct rc {
 #define RC_MODEL_TOTAL_BITS 11
 
 
-static int nofill(void *buffer, unsigned int len)
+static int INIT nofill(void *buffer, unsigned int len)
 {
 	return -1;
 }
@@ -92,7 +92,7 @@ static void INIT rc_read(struct rc *rc)
 {
 	rc->buffer_size = rc->fill((char *)rc->buffer, LZMA_IOBUF_SIZE);
 	if (rc->buffer_size <= 0)
-		error("unexpected EOF");
+		rc->error("unexpected EOF");
 	rc->ptr = rc->buffer;
 	rc->buffer_end = rc->buffer + rc->buffer_size;
 }
@@ -169,7 +169,7 @@ static inline void INIT rc_update_bit_0(struct rc *rc, uint16_t *p)
 	rc->range = rc->bound;
 	*p += ((1 << RC_MODEL_TOTAL_BITS) - *p) >> RC_MOVE_BITS;
 }
-static inline void rc_update_bit_1(struct rc *rc, uint16_t *p)
+static inline void INIT rc_update_bit_1(struct rc *rc, uint16_t *p)
 {
 	rc->range -= rc->bound;
 	rc->code -= rc->bound;
@@ -536,7 +536,7 @@ STATIC inline int INIT unlzma(unsigned char *buf, int in_len,
 			      int(*flush)(void*, unsigned int),
 			      unsigned char *output,
 			      int *posp,
-			      void(*error_fn)(char *x)
+			      void(*error)(char *x)
 	)
 {
 	struct lzma_header header;
@@ -552,7 +552,7 @@ STATIC inline int INIT unlzma(unsigned char *buf, int in_len,
 	unsigned char *inbuf;
 	int ret = -1;
 
-	set_error_fn(error_fn);
+	rc.error = error;
 
 	if (buf)
 		inbuf = buf;
@@ -659,9 +659,9 @@ STATIC int INIT decompress(unsigned char *buf, int in_len,
 			      int(*flush)(void*, unsigned int),
 			      unsigned char *output,
 			      int *posp,
-			      void(*error_fn)(char *x)
+			      void(*error)(char *x)
 	)
 {
-	return unlzma(buf, in_len - 4, fill, flush, output, posp, error_fn);
+	return unlzma(buf, in_len - 4, fill, flush, output, posp, error);
 }
 #endif

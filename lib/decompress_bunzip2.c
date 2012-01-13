@@ -49,7 +49,6 @@
 #define PREBOOT
 #else
 #include <linux/decompress/bunzip2.h>
-#include <linux/slab.h>
 #endif /* STATIC */
 
 #include <linux/decompress/mm.h>
@@ -678,13 +677,12 @@ STATIC int INIT bunzip2(unsigned char *buf, int len,
 			int(*flush)(void*, unsigned int),
 			unsigned char *outbuf,
 			int *pos,
-			void(*error_fn)(char *x))
+			void(*error)(char *x))
 {
 	struct bunzip_data *bd;
 	int i = -1;
 	unsigned char *inbuf;
 
-	set_error_fn(error_fn);
 	if (flush)
 		outbuf = malloc(BZIP2_IOBUF_SIZE);
 
@@ -747,8 +745,8 @@ STATIC int INIT decompress(unsigned char *buf, int len,
 			int(*flush)(void*, unsigned int),
 			unsigned char *outbuf,
 			int *pos,
-			void(*error_fn)(char *x))
+			void(*error)(char *x))
 {
-	return bunzip2(buf, len - 4, fill, flush, outbuf, pos, error_fn);
+	return bunzip2(buf, len - 4, fill, flush, outbuf, pos, error);
 }
 #endif

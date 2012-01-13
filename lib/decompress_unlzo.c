@@ -33,7 +33,6 @@
 #ifdef STATIC
 #include "lzo/lzo1x_decompress.c"
 #else
-#include <linux/slab.h>
 #include <linux/decompress/unlzo.h>
 #endif
 
@@ -91,15 +90,13 @@ STATIC inline int INIT unlzo(u8 *input, int in_len,
 				int (*fill) (void *, unsigned int),
 				int (*flush) (void *, unsigned int),
 				u8 *output, int *posp,
-				void (*error_fn) (char *x))
+				void (*error) (char *x))
 {
 	u8 skip = 0, r = 0;
 	u32 src_len, dst_len;
 	size_t tmp;
 	u8 *in_buf, *in_buf_save, *out_buf;
 	int ret = -1;
-
-	set_error_fn(error_fn);
 
 	if (output) {
 		out_buf = output;
@@ -206,7 +203,7 @@ STATIC inline int INIT unlzo(u8 *input, int in_len,
 	ret = 0;
 exit_2:
 	if (!input)
-		free(in_buf);
+		free(in_buf_save);
 exit_1:
 	if (!output)
 		free(out_buf);

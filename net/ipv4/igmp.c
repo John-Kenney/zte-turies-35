@@ -157,6 +157,16 @@ static void ip_ma_put(struct ip_mc_list *im)
 	}
 }
 
+#define for_each_pmc_rcu(in_dev, pmc)				\
+	for (pmc = rcu_dereference(in_dev->mc_list);		\
+	     pmc != NULL;					\
+	     pmc = rcu_dereference(pmc->next_rcu))
+
+#define for_each_pmc_rtnl(in_dev, pmc)				\
+	for (pmc = rtnl_dereference(in_dev->mc_list);		\
+	     pmc != NULL;					\
+	     pmc = rtnl_dereference(pmc->next_rcu))
+
 #ifdef CONFIG_IP_MULTICAST
 
 /*
@@ -284,6 +294,8 @@ igmp_scount(struct ip_mc_list *pmc, int type, int gdeleted, int sdeleted)
 	return scount;
 }
 
+#define igmp_skb_size(skb) (*(unsigned int *)((skb)->cb))
+
 static struct sk_buff *igmpv3_newpack(struct net_device *dev, int size)
 {
 	struct sk_buff *skb;
@@ -292,9 +304,16 @@ static struct sk_buff *igmpv3_newpack(struct net_device *dev, int size)
 	struct igmpv3_report *pig;
 	struct net *net = dev_net(dev);
 
-	skb = alloc_skb(size + LL_ALLOCATED_SPACE(dev), GFP_ATOMIC);
-	if (skb == NULL)
-		return NULL;
+	while (1) {
+		skb = alloc_skb(size + LL_ALLOCATED_SPACE(dev),
+				GFP_ATOMIC | __GFP_NOWARN);
+		if (skb)
+			break;
+		size >>= 1;
+		if (size < 256)
+			return NULL;
+	}
+	igmp_skb_size(skb) = size;
 
 	{
 		struct flowi fl = { .oif = dev->ifindex,
@@ -384,7 +403,7 @@ static struct sk_buff *add_grhead(struct sk_buff *skb, struct ip_mc_list *pmc,
 	return skb;
 }
 
-#define AVAILABLE(skb) ((skb) ? ((skb)->dev ? (skb)->dev->mtu - (skb)->len : \
+#define AVAILABLE(skb) ((skb) ? ((skb)->dev ? igmp_skb_size(skb) - (skb)->len : \
 	skb_tailroom(skb)) : 0)
 
 static struct sk_buff *add_grec(struct sk_buff *skb, struct ip_mc_list *pmc,
@@ -856,6 +875,18 @@ static void igmp_heard_query(struct in_device *in_dev, struct sk_buff *skb,
 		igmpv3_clear_delrec(in_dev);
 	} else if (len < 12) {
 		return;	/* ignore bogus packet; freed by caller */
+	} else if (IGMP_V1_SEEN(in_dev)) {
+		/* This is a v3 query with v1 queriers present */
+		max_delay = IGMP_Query_Response_Interval;
+		group = 0;
+	} else if (IGMP_V2_SEEN(in_dev)) {
+		/* this is a v3 query with v2 queriers present;
+		 * Interpretation of the max_delay code is problematic here.
+		 * A real v2 host would use ih_code directly, while v3 has a
+		 * different encoding. We use the v3 encoding as more likely
+		 * to be intended in a v3 query.
+		 */
+		max_delay = IGMPV3_MRC(ih3->code)*(HZ/IGMP_TIMER_SCALE);
 	} else { /* v3 */
 		if (!pskb_may_pull(skb, sizeof(struct igmpv3_query)))
 			return;
@@ -1258,14 +1289,14 @@ void ip_mc_rejoin_group(struct ip_mc_list *im)
 	if (im->multiaddr == IGMP_ALL_HOSTS)
 		return;
 
-	if (IGMP_V1_SEEN(in_dev) || IGMP_V2_SEEN(in_dev)) {
-		igmp_mod_timer(im, IGMP_Initial_Report_Delay);
-		return;
-	}
-	/* else, v3 */
-	im->crcount = in_dev->mr_qrv ? in_dev->mr_qrv :
-		IGMP_Unsolicited_Report_Count;
-	igmp_ifc_event(in_dev);
+	/* a failover is happening and switches
+	 * must be notified immediately */
+	if (IGMP_V1_SEEN(in_dev))
+		igmp_send_report(in_dev, im, IGMP_HOST_MEMBERSHIP_REPORT);
+	else if (IGMP_V2_SEEN(in_dev))
+		igmp_send_report(in_dev, im, IGMPV2_HOST_MEMBERSHIP_REPORT);
+	else
+		igmp_send_report(in_dev, im, IGMPV3_HOST_MEMBERSHIP_REPORT);
 #endif
 }
 
@@ -2295,10 +2326,8 @@ void ip_mc_drop_socket(struct sock *sk)
 
 		in_dev = inetdev_by_index(net, iml->multi.imr_ifindex);
 		(void) ip_mc_leave_src(sk, iml, in_dev);
-		if (in_dev != NULL) {
+		if (in_dev != NULL)
 			ip_mc_dec_group(in_dev, iml->multi.imr_multiaddr.s_addr);
-			in_dev_put(in_dev);
-		}
 		/* decrease mem now to avoid the memleak warning */
 		atomic_sub(sizeof(*iml), &sk->sk_omem_alloc);
 		call_rcu(&iml->rcu, ip_mc_socklist_reclaim);

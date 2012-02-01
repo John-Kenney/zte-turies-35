@@ -1269,18 +1269,11 @@ skip_hashing:
 
 void rt_bind_peer(struct rtable *rt, int create)
 {
-	static DEFINE_SPINLOCK(rt_peer_lock);
 	struct inet_peer *peer;
 
 	peer = inet_getpeer(rt->rt_dst, create);
 
-	spin_lock_bh(&rt_peer_lock);
-	if (rt->peer == NULL) {
-		rt->peer = peer;
-		peer = NULL;
-	}
-	spin_unlock_bh(&rt_peer_lock);
-	if (peer)
+	if (peer && cmpxchg(&rt->peer, NULL, peer) != NULL)
 		inet_putpeer(peer);
 }
 
@@ -2129,7 +2122,7 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	    ipv4_is_loopback(saddr))
 		goto martian_source;
 
-	if (daddr == htonl(0xFFFFFFFF) || (saddr == 0 && daddr == 0))
+	if (ipv4_is_lbcast(daddr) || (saddr == 0 && daddr == 0))
 		goto brd_input;
 
 	/* Accept zero addresses only to limited broadcast;
@@ -2138,8 +2131,7 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	if (ipv4_is_zeronet(saddr))
 		goto martian_source;
 
-	if (ipv4_is_lbcast(daddr) || ipv4_is_zeronet(daddr) ||
-	    ipv4_is_loopback(daddr))
+	if (ipv4_is_zeronet(daddr) || ipv4_is_loopback(daddr))
 		goto martian_destination;
 
 	/*
@@ -2367,26 +2359,26 @@ static int __mkroute_output(struct rtable **result,
 	struct rtable *rth;
 	struct in_device *in_dev;
 	u32 tos = RT_FL_TOS(oldflp);
-	int err = 0;
 
-	if (ipv4_is_loopback(fl->fl4_src) && !(dev_out->flags&IFF_LOOPBACK))
+	if (ipv4_is_loopback(fl->fl4_src) && !(dev_out->flags & IFF_LOOPBACK))
 		return -EINVAL;
 
-	if (fl->fl4_dst == htonl(0xFFFFFFFF))
+	if (ipv4_is_lbcast(fl->fl4_dst))
 		res->type = RTN_BROADCAST;
 	else if (ipv4_is_multicast(fl->fl4_dst))
 		res->type = RTN_MULTICAST;
-	else if (ipv4_is_lbcast(fl->fl4_dst) || ipv4_is_zeronet(fl->fl4_dst))
+	else if (ipv4_is_zeronet(fl->fl4_dst))
 		return -EINVAL;
 
 	if (dev_out->flags & IFF_LOOPBACK)
 		flags |= RTCF_LOCAL;
 
-	/* get work reference to inet device */
-	in_dev = in_dev_get(dev_out);
-	if (!in_dev)
+	rcu_read_lock();
+	in_dev = __in_dev_get_rcu(dev_out);
+	if (!in_dev) {
+		rcu_read_unlock();
 		return -EINVAL;
-
+	}
 	if (res->type == RTN_BROADCAST) {
 		flags |= RTCF_BROADCAST | RTCF_LOCAL;
 		if (res->fi) {
@@ -2394,13 +2386,13 @@ static int __mkroute_output(struct rtable **result,
 			res->fi = NULL;
 		}
 	} else if (res->type == RTN_MULTICAST) {
-		flags |= RTCF_MULTICAST|RTCF_LOCAL;
+		flags |= RTCF_MULTICAST | RTCF_LOCAL;
 		if (!ip_check_mc(in_dev, oldflp->fl4_dst, oldflp->fl4_src,
 				 oldflp->proto))
 			flags &= ~RTCF_LOCAL;
 		/* If multicast route do not exist use
-		   default one, but do not gateway in this case.
-		   Yes, it is hack.
+		 * default one, but do not gateway in this case.
+		 * Yes, it is hack.
 		 */
 		if (res->fi && res->prefixlen < 4) {
 			fib_info_put(res->fi);
@@ -2411,9 +2403,12 @@ static int __mkroute_output(struct rtable **result,
 
 	rth = dst_alloc(&ipv4_dst_ops);
 	if (!rth) {
-		err = -ENOBUFS;
-		goto cleanup;
+		rcu_read_unlock();
+		return -ENOBUFS;
 	}
+	in_dev_hold(in_dev);
+	rcu_read_unlock();
+	rth->idev = in_dev;
 
 	atomic_set(&rth->u.dst.__refcnt, 1);
 	rth->u.dst.flags= DST_HOST;
@@ -2434,7 +2429,6 @@ static int __mkroute_output(struct rtable **result,
 	   cache entry */
 	rth->u.dst.dev	= dev_out;
 	dev_hold(dev_out);
-	rth->idev	= in_dev_get(dev_out);
 	rth->rt_gateway = fl->fl4_dst;
 	rth->rt_spec_dst= fl->fl4_src;
 
@@ -2469,13 +2463,8 @@ static int __mkroute_output(struct rtable **result,
 	rt_set_nexthop(rth, res, 0);
 
 	rth->rt_flags = flags;
-
 	*result = rth;
- cleanup:
-	/* release work reference to inet device */
-	in_dev_put(in_dev);
-
-	return err;
+	return 0;
 }
 
 static int ip_mkroute_output(struct rtable **rp,
@@ -2545,7 +2534,7 @@ static int ip_route_output_slow(struct net *net, struct rtable **rp,
 
 		if (oldflp->oif == 0 &&
 		    (ipv4_is_multicast(oldflp->fl4_dst) ||
-		     oldflp->fl4_dst == htonl(0xFFFFFFFF))) {
+		     ipv4_is_lbcast(oldflp->fl4_dst))) {
 			/* It is equivalent to inet_addr_type(saddr) == RTN_LOCAL */
 			dev_out = ip_dev_find(net, oldflp->fl4_src);
 			if (dev_out == NULL)
@@ -2588,13 +2577,13 @@ static int ip_route_output_slow(struct net *net, struct rtable **rp,
 			goto out;
 
 		/* RACE: Check return value of inet_select_addr instead. */
-		if (__in_dev_get_rtnl(dev_out) == NULL) {
+		if (rcu_dereference_raw(dev_out->ip_ptr) == NULL) {
 			dev_put(dev_out);
 			goto out;	/* Wrong error code */
 		}
 
 		if (ipv4_is_local_multicast(oldflp->fl4_dst) ||
-		    oldflp->fl4_dst == htonl(0xFFFFFFFF)) {
+		    ipv4_is_lbcast(oldflp->fl4_dst)) {
 			if (!fl.fl4_src)
 				fl.fl4_src = inet_select_addr(dev_out, 0,
 							      RT_SCOPE_LINK);

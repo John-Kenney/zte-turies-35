@@ -627,6 +627,7 @@ ipip_tunnel_ioctl (struct net_device *dev, struct ifreq *ifr, int cmd)
 				}
 				t = netdev_priv(dev);
 				ipip_tunnel_unlink(ipn, t);
+				synchronize_net();
 				t->parms.iph.saddr = p.iph.saddr;
 				t->parms.iph.daddr = p.iph.daddr;
 				memcpy(dev->dev_addr, &p.iph.saddr, 4);
@@ -711,6 +712,7 @@ static void ipip_tunnel_setup(struct net_device *dev)
 	dev->iflink		= 0;
 	dev->addr_len		= 4;
 	dev->features		|= NETIF_F_NETNS_LOCAL;
+	dev->features		|= NETIF_F_LLTX;
 	dev->priv_flags		&= ~IFF_XMIT_DST_RELEASE;
 }
 
@@ -744,7 +746,7 @@ static void __net_init ipip_fb_tunnel_init(struct net_device *dev)
 	ipn->tunnels_wc[0]	= tunnel;
 }
 
-static struct xfrm_tunnel ipip_handler = {
+static struct xfrm_tunnel ipip_handler __read_mostly = {
 	.handler	=	ipip_rcv,
 	.err_handler	=	ipip_err,
 	.priority	=	1,
@@ -850,3 +852,4 @@ static void __exit ipip_fini(void)
 module_init(ipip_init);
 module_exit(ipip_fini);
 MODULE_LICENSE("GPL");
+MODULE_ALIAS("tunl0");

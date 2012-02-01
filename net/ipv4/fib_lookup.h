@@ -19,6 +19,13 @@ struct fib_alias {
 
 #define FA_S_ACCESSED	0x01
 
+/* Dont write on fa_state unless needed, to keep it shared on all cpus */
+static inline void fib_alias_accessed(struct fib_alias *fa)
+{
+	if (!(fa->fa_state & FA_S_ACCESSED))
+		fa->fa_state |= FA_S_ACCESSED;
+}
+
 /* Exported by fib_semantics.c */
 extern int fib_semantic_match(struct list_head *head,
 			      const struct flowi *flp,
@@ -42,11 +49,8 @@ extern int fib_detect_death(struct fib_info *fi, int order,
 static inline void fib_result_assign(struct fib_result *res,
 				     struct fib_info *fi)
 {
-	if (res->fi != NULL)
-		fib_info_put(res->fi);
+	/* we used to play games with refcounts, but we now use RCU */
 	res->fi = fi;
-	if (fi != NULL)
-		atomic_inc(&fi->fib_clntref);
 }
 
 #endif /* _FIB_LOOKUP_H */

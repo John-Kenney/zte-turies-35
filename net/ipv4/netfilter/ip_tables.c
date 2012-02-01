@@ -884,7 +884,7 @@ get_counters(const struct xt_table_info *t,
 	struct ipt_entry *iter;
 	unsigned int cpu;
 	unsigned int i;
-	unsigned int curcpu;
+	unsigned int curcpu = get_cpu();
 
 	/* Instead of clearing (by a previous call to memset())
 	 * the counters and using adds, we set the counters
@@ -894,19 +894,22 @@ get_counters(const struct xt_table_info *t,
 	 * if new softirq were to run and call ipt_do_table
 	 */
 	local_bh_disable();
-	curcpu = smp_processor_id();
-
 	i = 0;
 	xt_entry_foreach(iter, t->entries[curcpu], t->size) {
 		SET_COUNTER(counters[i], iter->counters.bcnt,
 			    iter->counters.pcnt);
 		++i;
 	}
+	local_bh_enable();
+	/* Processing counters from other cpus, we can let bottom half enabled,
+	 * (preemption is disabled)
+	 */
 
 	for_each_possible_cpu(cpu) {
 		if (cpu == curcpu)
 			continue;
 		i = 0;
+		local_bh_disable();
 		xt_info_wrlock(cpu);
 		xt_entry_foreach(iter, t->entries[cpu], t->size) {
 			ADD_COUNTER(counters[i], iter->counters.bcnt,
@@ -914,8 +917,9 @@ get_counters(const struct xt_table_info *t,
 			++i; /* macro does multi eval of i */
 		}
 		xt_info_wrunlock(cpu);
+		local_bh_enable();
 	}
-	local_bh_enable();
+	put_cpu();
 }
 
 static struct xt_counters *alloc_counters(const struct xt_table *table)
@@ -1076,6 +1080,7 @@ static int compat_table_info(const struct xt_table_info *info,
 	memcpy(newinfo, info, offsetof(struct xt_table_info, entries));
 	newinfo->initial_entries = 0;
 	loc_cpu_entry = info->entries[raw_smp_processor_id()];
+	xt_compat_init_offsets(AF_INET, info->number);
 	xt_entry_foreach(iter, loc_cpu_entry, info->size) {
 		ret = compat_calc_entry(iter, info, loc_cpu_entry, newinfo);
 		if (ret != 0)
@@ -1120,6 +1125,7 @@ static int get_info(struct net *net, void __user *user,
 			private = &tmp;
 		}
 #endif
+		memset(&info, 0, sizeof(info));
 		info.valid_hooks = t->valid_hooks;
 		memcpy(info.hook_entry, private->hook_entry,
 		       sizeof(info.hook_entry));
@@ -1676,6 +1682,7 @@ translate_compat_table(struct net *net,
 	duprintf("translate_compat_table: size %u\n", info->size);
 	j = 0;
 	xt_compat_lock(AF_INET);
+	xt_compat_init_offsets(AF_INET, number);
 	/* Walk through entries, checking offsets. */
 	xt_entry_foreach(iter0, entry0, total_size) {
 		ret = check_compat_entry_size_and_hooks(iter0, info, &size,

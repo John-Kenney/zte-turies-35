@@ -240,18 +240,16 @@ EXPORT_SYMBOL(inet_ehash_secret);
 
 /*
  * inet_ehash_secret must be set exactly once
- * Instead of using a dedicated spinlock, we (ab)use inetsw_lock
  */
 void build_ehash_secret(void)
 {
 	u32 rnd;
+
 	do {
 		get_random_bytes(&rnd, sizeof(rnd));
 	} while (rnd == 0);
-	spin_lock_bh(&inetsw_lock);
-	if (!inet_ehash_secret)
-		inet_ehash_secret = rnd;
-	spin_unlock_bh(&inetsw_lock);
+
+	cmpxchg(&inet_ehash_secret, 0, rnd);
 }
 EXPORT_SYMBOL(build_ehash_secret);
 
@@ -895,6 +893,19 @@ int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 }
 EXPORT_SYMBOL(inet_ioctl);
 
+#ifdef CONFIG_COMPAT
+int inet_compat_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
+{
+	struct sock *sk = sock->sk;
+	int err = -ENOIOCTLCMD;
+
+	if (sk->sk_prot->compat_ioctl)
+		err = sk->sk_prot->compat_ioctl(sk, cmd, arg);
+
+	return err;
+}
+#endif
+
 const struct proto_ops inet_stream_ops = {
 	.family		   = PF_INET,
 	.owner		   = THIS_MODULE,
@@ -918,6 +929,7 @@ const struct proto_ops inet_stream_ops = {
 #ifdef CONFIG_COMPAT
 	.compat_setsockopt = compat_sock_common_setsockopt,
 	.compat_getsockopt = compat_sock_common_getsockopt,
+	.compat_ioctl	   = inet_compat_ioctl,
 #endif
 };
 EXPORT_SYMBOL(inet_stream_ops);
@@ -944,6 +956,7 @@ const struct proto_ops inet_dgram_ops = {
 #ifdef CONFIG_COMPAT
 	.compat_setsockopt = compat_sock_common_setsockopt,
 	.compat_getsockopt = compat_sock_common_getsockopt,
+	.compat_ioctl	   = inet_compat_ioctl,
 #endif
 };
 EXPORT_SYMBOL(inet_dgram_ops);
@@ -974,6 +987,7 @@ static const struct proto_ops inet_sockraw_ops = {
 #ifdef CONFIG_COMPAT
 	.compat_setsockopt = compat_sock_common_setsockopt,
 	.compat_getsockopt = compat_sock_common_getsockopt,
+	.compat_ioctl	   = inet_compat_ioctl,
 #endif
 };
 

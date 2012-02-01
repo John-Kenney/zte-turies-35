@@ -45,7 +45,7 @@
 #include <net/netns/generic.h>
 #include <net/rtnetlink.h>
 
-#ifdef CONFIG_IPV6
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 #include <net/ipv6.h>
 #include <net/ip6_fib.h>
 #include <net/ip6_route.h>
@@ -63,13 +63,13 @@
    We cannot track such dead loops during route installation,
    it is infeasible task. The most general solutions would be
    to keep skb->encapsulation counter (sort of local ttl),
-   and silently drop packet when it expires. It is the best
+   and silently drop packet when it expires. It is a good
    solution, but it supposes maintaing new variable in ALL
    skb, even if no tunneling is used.
 
-   Current solution: HARD_TX_LOCK lock breaks dead loops.
-
-
+   Current solution: xmit_recursion breaks dead loops. This is a percpu
+   counter, since when we enter the first ndo_xmit(), cpu migration is
+   forbidden. We force an exit if this counter reaches RECURSION_LIMIT
 
    2. Networking dead loops would not kill routers, but would really
    kill network. IP hop limit plays role of "t->recursion" in this case,
@@ -375,11 +375,11 @@ static struct ip_tunnel * ipgre_tunnel_locate(struct net *net,
 	if (parms->name[0])
 		strlcpy(name, parms->name, IFNAMSIZ);
 	else
-		sprintf(name, "gre%%d");
+		strcpy(name, "gre%d");
 
 	dev = alloc_netdev(sizeof(*t), name, ipgre_tunnel_setup);
 	if (!dev)
-	  return NULL;
+		return NULL;
 
 	dev_net_set(dev, net);
 
@@ -699,7 +699,7 @@ static netdev_tx_t ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev
 			if ((dst = rt->rt_gateway) == 0)
 				goto tx_error_icmp;
 		}
-#ifdef CONFIG_IPV6
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 		else if (skb->protocol == htons(ETH_P_IPV6)) {
 			struct in6_addr *addr6;
 			int addr_type;
@@ -772,7 +772,7 @@ static netdev_tx_t ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev
 			goto tx_error;
 		}
 	}
-#ifdef CONFIG_IPV6
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 	else if (skb->protocol == htons(ETH_P_IPV6)) {
 		struct rt6_info *rt6 = (struct rt6_info *)skb_dst(skb);
 
@@ -848,7 +848,7 @@ static netdev_tx_t ipgre_tunnel_xmit(struct sk_buff *skb, struct net_device *dev
 	if ((iph->ttl = tiph->ttl) == 0) {
 		if (skb->protocol == htons(ETH_P_IP))
 			iph->ttl = old_iph->ttl;
-#ifdef CONFIG_IPV6
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 		else if (skb->protocol == htons(ETH_P_IPV6))
 			iph->ttl = ((struct ipv6hdr *)old_iph)->hop_limit;
 #endif
@@ -1024,6 +1024,7 @@ ipgre_tunnel_ioctl (struct net_device *dev, struct ifreq *ifr, int cmd)
 					break;
 				}
 				ipgre_tunnel_unlink(ign, t);
+				synchronize_net();
 				t->parms.iph.saddr = p.iph.saddr;
 				t->parms.iph.daddr = p.iph.daddr;
 				t->parms.i_key = p.i_key;
@@ -1485,6 +1486,10 @@ static int ipgre_newlink(struct net *src_net, struct net_device *dev, struct nla
 	if (!tb[IFLA_MTU])
 		dev->mtu = mtu;
 
+	/* Can use a lockless transmit, unless we generate output sequences */
+	if (!(nt->parms.o_flags & GRE_SEQ))
+		dev->features |= NETIF_F_LLTX;
+
 	err = register_netdevice(dev);
 	if (err)
 		goto out;
@@ -1701,3 +1706,4 @@ module_exit(ipgre_fini);
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_RTNL_LINK("gre");
 MODULE_ALIAS_RTNL_LINK("gretap");
+MODULE_ALIAS("gre0");

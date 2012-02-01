@@ -186,7 +186,9 @@ static inline struct tnode *node_parent_rcu(struct node *node)
 {
 	struct tnode *ret = node_parent(node);
 
-	return rcu_dereference(ret);
+	return rcu_dereference_check(ret,
+				     rcu_read_lock_held() ||
+				     lockdep_rtnl_is_held());
 }
 
 /* Same as rcu_assign_pointer
@@ -1389,8 +1391,7 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi *flp,
 	t_key cindex = 0;
 	int current_prefix_length = KEYLENGTH;
 	struct tnode *cn;
-	t_key node_prefix, key_prefix, pref_mismatch;
-	int mp;
+	t_key pref_mismatch;
 
 	rcu_read_lock();
 
@@ -1505,10 +1506,7 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi *flp,
 		 * matching prefix.
 		 */
 
-		node_prefix = mask_pfx(cn->key, cn->pos);
-		key_prefix = mask_pfx(key, cn->pos);
-		pref_mismatch = key_prefix^node_prefix;
-		mp = 0;
+		pref_mismatch = mask_pfx(cn->key ^ key, cn->pos);
 
 		/*
 		 * In short: If skipped bits in this node do not match
@@ -1516,13 +1514,9 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi *flp,
 		 * state.directly.
 		 */
 		if (pref_mismatch) {
-			while (!(pref_mismatch & (1<<(KEYLENGTH-1)))) {
-				mp++;
-				pref_mismatch = pref_mismatch << 1;
-			}
-			key_prefix = tkey_extract_bits(cn->key, mp, cn->pos-mp);
+			int mp = KEYLENGTH - fls(pref_mismatch);
 
-			if (key_prefix != 0)
+			if (tkey_extract_bits(cn->key, mp, cn->pos - mp) != 0)
 				goto backtrace;
 
 			if (current_prefix_length >= cn->pos)
@@ -1753,7 +1747,9 @@ static struct leaf *leaf_walk_rcu(struct tnode *p, struct node *c)
 
 static struct leaf *trie_firstleaf(struct trie *t)
 {
-	struct tnode *n = (struct tnode *) rcu_dereference(t->trie);
+	struct tnode *n = (struct tnode *) rcu_dereference_check(t->trie,
+							rcu_read_lock_held() ||
+							lockdep_rtnl_is_held());
 
 	if (!n)
 		return NULL;
@@ -1810,6 +1806,11 @@ int fib_table_flush(struct fib_table *tb)
 	return found;
 }
 
+void fib_free_table(struct fib_table *tb)
+{
+	kfree(tb);
+}
+
 void fib_table_select_default(struct fib_table *tb,
 			      const struct flowi *flp,
 			      struct fib_result *res)
@@ -1851,7 +1852,8 @@ void fib_table_select_default(struct fib_table *tb,
 		if (!next_fi->fib_nh[0].nh_gw ||
 		    next_fi->fib_nh[0].nh_scope != RT_SCOPE_LINK)
 			continue;
-		fa->fa_state |= FA_S_ACCESSED;
+
+		fib_alias_accessed(fa);
 
 		if (fi == NULL) {
 			if (next_fi != res->fi)

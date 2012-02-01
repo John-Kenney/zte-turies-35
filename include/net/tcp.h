@@ -66,6 +66,9 @@ extern void tcp_time_wait(struct sock *sk, int state, int timeo);
  */
 #define MAX_TCP_WINDOW		32767U
 
+/* Offer an initial receive window of 10 mss. */
+#define TCP_DEFAULT_INIT_RCVWND	10
+
 /* Minimal accepted MSS. It is (60+60+8) - (20+20). */
 #define TCP_MIN_MSS		88U
 
@@ -230,7 +233,7 @@ extern int sysctl_tcp_fack;
 extern int sysctl_tcp_reordering;
 extern int sysctl_tcp_ecn;
 extern int sysctl_tcp_dsack;
-extern int sysctl_tcp_mem[3];
+extern long sysctl_tcp_mem[3];
 extern int sysctl_tcp_wmem[3];
 extern int sysctl_tcp_rmem[3];
 extern int sysctl_tcp_app_win;
@@ -258,7 +261,7 @@ extern int sysctl_tcp_cookie_size;
 extern int sysctl_tcp_thin_linear_timeouts;
 extern int sysctl_tcp_thin_dupack;
 
-extern atomic_t tcp_memory_allocated;
+extern atomic_long_t tcp_memory_allocated;
 extern struct percpu_counter tcp_sockets_allocated;
 extern int tcp_memory_pressure;
 
@@ -291,7 +294,7 @@ static inline bool tcp_too_many_orphans(struct sock *sk, int shift)
 	}
 
 	if (sk->sk_wmem_queued > SOCK_MIN_SNDBUF &&
-	    atomic_read(&tcp_memory_allocated) > sysctl_tcp_mem[2])
+	    atomic_long_read(&tcp_memory_allocated) > sysctl_tcp_mem[2])
 		return true;
 	return false;
 }
@@ -371,8 +374,6 @@ static inline void tcp_dec_quickack_mode(struct sock *sk,
 			icsk->icsk_ack.quick -= pkts;
 	}
 }
-
-extern void tcp_enter_quickack_mode(struct sock *sk);
 
 #define	TCP_ECN_OK		1
 #define	TCP_ECN_QUEUE_CWR	2
@@ -860,6 +861,21 @@ static inline __u32 tcp_current_ssthresh(const struct sock *sk)
 
 /* Use define here intentionally to get WARN_ON location shown at the caller */
 #define tcp_verify_left_out(tp)	WARN_ON(tcp_left_out(tp) > tp->packets_out)
+
+/*
+ * Convert RFC 3390 larger initial window into an equivalent number of packets.
+ *
+ * John Heffner states:
+ *
+ *	The RFC specifies a window of no more than 4380 bytes
+ *	unless 2*MSS > 4380.  Reading the pseudocode in the RFC
+ *	is a bit misleading because they use a clamp at 4380 bytes
+ *	rather than a multiplier in the relevant range.
+ */
+static inline u32 rfc3390_bytes_to_packets(const u32 smss)
+{
+	return smss <= 1095 ? 4 : (smss > 1460 ? 2 : 3);
+}
 
 extern void tcp_enter_cwr(struct sock *sk, const int set_ssthresh);
 extern __u32 tcp_init_cwnd(struct tcp_sock *tp, struct dst_entry *dst);

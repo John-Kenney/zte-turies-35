@@ -1776,6 +1776,8 @@ source "net/Kconfig"
 
 source "drivers/Kconfig"
 
+source "drivers/ar6000/Kconfig"
+
 source "fs/Kconfig"
 
 source "arch/arm/Kconfig.debug"

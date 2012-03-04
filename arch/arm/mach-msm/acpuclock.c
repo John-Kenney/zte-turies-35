@@ -432,13 +432,11 @@ static void acpuclk_set_div(const struct clkctl_acpu_speed *hunt_s)
 		udelay(50);
 	}
 
-#ifdef OVERCLOCK_AHB
 	// Pump the PLL2 up another 19200kHz (overclock stock 600MHz from 595.2MHz to 604.8MHz)
 	if(hunt_s->pll==2 && hunt_s->a11clk_khz==604800) {
 		writel(63, PLLn_L_VAL(2));
 		udelay(50);
 	}
-#endif
 
 	/* Program clock source and divider */
 	reg_clkctl = readl(A11S_CLK_CNTL_ADDR);
